@@ -7,12 +7,12 @@
   "author": "Kevin Smith",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/ksmith211/openclaw-xmpp.git"
+    "url": "git+https://github.com/ksmith221/openclaw-xmpp.git"
   },
   "bugs": {
-    "url": "https://github.com/ksmith211/openclaw-xmpp/issues"
+    "url": "https://github.com/ksmith221/openclaw-xmpp/issues"
   },
-  "homepage": "https://github.com/ksmith211/openclaw-xmpp#readme",
+  "homepage": "https://github.com/ksmith221/openclaw-xmpp#readme",
   "openclaw": {
     "extensions": ["./index.ts"],
     "channel": {
