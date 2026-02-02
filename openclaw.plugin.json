@@ -1,0 +1,12 @@
+{
+  "id": "xmpp",
+  "channels": ["xmpp"],
+  "name": "XMPP",
+  "description": "XMPP channel plugin (DMs) for OpenClaw",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {},
+    "required": []
+  }
+}

@@ -1,0 +1,35 @@
+{
+  "name": "@ksmith221/openclaw-xmpp",
+  "version": "0.1.0",
+  "description": "XMPP DM channel plugin for OpenClaw",
+  "type": "module",
+  "license": "MIT",
+  "author": "Kevin Smith",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ksmith221/openclaw-xmpp.git"
+  },
+  "bugs": {
+    "url": "https://github.com/ksmith221/openclaw-xmpp/issues"
+  },
+  "homepage": "https://github.com/ksmith221/openclaw-xmpp#readme",
+  "openclaw": {
+    "extensions": ["./index.ts"],
+    "channel": {
+      "id": "xmpp",
+      "label": "XMPP",
+      "selectionLabel": "XMPP (DMs)",
+      "docsLabel": "xmpp",
+      "blurb": "XMPP DM channel plugin (Snikket-compatible).",
+      "aliases": ["xmpp"],
+      "order": 90,
+      "quickstartAllowFrom": false
+    }
+  },
+  "dependencies": {
+    "@xmpp/client": "^0.13.2",
+    "@xmpp/debug": "^0.13.2",
+    "@xmpp/xml": "^0.13.2",
+    "zod": "^4.3.6"
+  }
+}

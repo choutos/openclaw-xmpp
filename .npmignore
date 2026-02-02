@@ -1,0 +1,19 @@
+# Never ship deps from a local install
+node_modules/
+
+# Don’t ship lockfiles
+package-lock.json
+pnpm-lock.yaml
+yarn.lock
+
+# Dev/editor clutter
+.DS_Store
+.vscode/
+*.log
+
+# OpenClaw local state folder name (this repo layout)
+.openclaw/
+
+# tests/build artifacts (if you add them later)
+dist/
+coverage/
