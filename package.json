@@ -1,35 +1,58 @@
 {
-  "name": "@ksmith221/openclaw-xmpp",
-  "version": "0.1.0",
-  "description": "XMPP DM channel plugin for OpenClaw",
+  "name": "@choutos/openclaw-xmpp",
+  "version": "0.2.0",
+  "description": "XMPP/Jabber channel plugin for OpenClaw",
   "type": "module",
   "license": "MIT",
   "author": "Kevin Smith",
+  "contributors": ["Víctor Andrade"],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/ksmith221/openclaw-xmpp.git"
+    "url": "git+https://github.com/choutos/openclaw-xmpp.git"
   },
-  "bugs": {
-    "url": "https://github.com/ksmith221/openclaw-xmpp/issues"
+  "bugs": { "url": "https://github.com/choutos/openclaw-xmpp/issues" },
+  "homepage": "https://github.com/choutos/openclaw-xmpp#readme",
+  "engines": {
+    "node": ">=24.16.0 <25 || >=26.1.0"
   },
-  "homepage": "https://github.com/ksmith221/openclaw-xmpp#readme",
+  "scripts": {
+    "check": "tsc --noEmit",
+    "test": "vitest run"
+  },
   "openclaw": {
     "extensions": ["./index.ts"],
+    "setupEntry": "./setup-entry.ts",
     "channel": {
       "id": "xmpp",
       "label": "XMPP",
-      "selectionLabel": "XMPP (DMs)",
+      "selectionLabel": "XMPP (Jabber JID + password)",
+      "detailLabel": "XMPP",
       "docsLabel": "xmpp",
-      "blurb": "XMPP DM channel plugin (Snikket-compatible).",
-      "aliases": ["xmpp"],
-      "order": 90,
+      "blurb": "XMPP/Jabber direct messages for OpenClaw agents.",
+      "aliases": ["jabber"],
       "quickstartAllowFrom": false
+    },
+    "compat": {
+      "pluginApi": ">=2026.9.9",
+      "minGatewayVersion": "2026.9.9"
+    },
+    "build": {
+      "openclawVersion": "2026.10.3",
+      "pluginSdkVersion": "2026.10.3",
+      "bundledDist": false
     }
   },
   "dependencies": {
-    "@xmpp/client": "^0.13.2",
-    "@xmpp/debug": "^0.13.2",
-    "@xmpp/xml": "^0.13.2",
-    "zod": "^4.3.6"
+    "@xmpp/client": "^0.14.0",
+    "@xmpp/debug": "^0.14.0"
+  },
+  "peerDependencies": { "openclaw": ">=2026.9.9" },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@types/xmpp__client": "^0.14.1",
+    "@types/xmpp__debug": "^0.14.0",
+    "openclaw": "2026.10.3",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.0"
   }
 }

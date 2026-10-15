@@ -1,18 +1,12 @@
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
-import { emptyPluginConfigSchema } from "openclaw/plugin-sdk";
+import { defineChannelPluginEntry } from "openclaw/plugin-sdk/channel-core";
 
 import { xmppPlugin } from "./src/channel.js";
 import { setXmppRuntime } from "./src/runtime.js";
 
-const plugin = {
+export default defineChannelPluginEntry({
   id: "xmpp",
   name: "XMPP",
   description: "XMPP channel plugin (DMs) for OpenClaw",
-  configSchema: emptyPluginConfigSchema(),
-  register(api: OpenClawPluginApi) {
-    setXmppRuntime(api.runtime);
-    api.registerChannel({ plugin: xmppPlugin });
-  },
-};
-
-export default plugin;
+  plugin: xmppPlugin,
+  setRuntime: setXmppRuntime,
+});

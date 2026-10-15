@@ -2,11 +2,65 @@
   "id": "xmpp",
   "channels": ["xmpp"],
   "name": "XMPP",
-  "description": "XMPP channel plugin (DMs) for OpenClaw",
+  "description": "XMPP/Jabber direct-message channel for OpenClaw",
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
-    "properties": {},
-    "required": []
+    "properties": {}
+  },
+  "channelConfigs": {
+    "xmpp": {
+      "schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": { "type": "boolean" },
+          "jid": { "type": "string" },
+          "password": { "type": "string" },
+          "service": { "type": "string" },
+          "dmPolicy": {
+            "type": "string",
+            "enum": ["open", "pairing", "disabled"]
+          },
+          "allowFrom": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "accounts": {
+            "type": "object",
+            "additionalProperties": { "$ref": "#/$defs/account" }
+          }
+        },
+        "$defs": {
+          "account": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "enabled": { "type": "boolean" },
+              "name": { "type": "string" },
+              "jid": { "type": "string" },
+              "password": { "type": "string" },
+              "service": { "type": "string" },
+              "dmPolicy": {
+                "type": "string",
+                "enum": ["open", "pairing", "disabled"]
+              },
+              "allowFrom": {
+                "type": "array",
+                "items": { "type": "string" }
+              }
+            }
+          }
+        }
+      },
+      "uiHints": {
+        "jid": { "label": "JID" },
+        "password": { "label": "Password", "sensitive": true },
+        "service": {
+          "label": "XMPP service URL",
+          "placeholder": "xmpp://example.com:5222"
+        }
+      }
+    }
   }
 }

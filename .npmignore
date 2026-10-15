@@ -14,6 +14,8 @@ yarn.lock
 # OpenClaw local state folder name (this repo layout)
 .openclaw/
 
-# tests/build artifacts (if you add them later)
+# tests/build artifacts
 dist/
 coverage/
+*.test.ts
+tsconfig.json

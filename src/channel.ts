@@ -5,7 +5,8 @@ import {
   type ChannelPlugin,
   type ChannelSetupInput,
   type OpenClawConfig,
-} from "openclaw/plugin-sdk";
+  type PluginRuntime,
+} from "openclaw/plugin-sdk/core";
 
 import {
   listXmppAccountIds,
@@ -16,20 +17,27 @@ import {
 } from "./accounts.js";
 // (no zod schema import)
 import { handleXmppInbound } from "./inbound.js";
+import {
+  bareJid,
+  isJidAllowed,
+  isValidBareJid,
+  normalizeAllowEntry,
+  validateServiceUrl,
+} from "./jid.js";
 import { sendTextXmpp } from "./send.js";
 import { startXmppClient, type XmppAccountRuntime } from "./transport.js";
-import * as xmppXml from "@xmpp/xml";
+import { xml } from "@xmpp/client";
 
 const meta = {
   id: "xmpp",
   label: "XMPP",
   selectionLabel: "XMPP (Snikket / Prosody / ejabberd)",
-  docsPath: "/channels/xmpp",
+  docsPath: "/plugins/community",
   docsLabel: "xmpp",
   blurb: "XMPP chat via direct messages.",
   aliases: ["jabber"],
   order: 90,
-  quickstartAllowFrom: true,
+  quickstartAllowFrom: false,
 };
 
 type XmppSetupInput = ChannelSetupInput & {
@@ -38,11 +46,6 @@ type XmppSetupInput = ChannelSetupInput & {
   service?: string;
 };
 
-const xml = (() => {
-  const anyXml = xmppXml as any;
-  return anyXml.xml ?? anyXml.default ?? anyXml;
-})();
-
 const runtimes = new Map<string, XmppAccountRuntime>();
 
 export const xmppPlugin: ChannelPlugin<ResolvedXmppAccount> = {
@@ -50,9 +53,12 @@ export const xmppPlugin: ChannelPlugin<ResolvedXmppAccount> = {
   meta,
   pairing: {
     idLabel: "jid",
-    normalizeAllowEntry: (entry) => entry.replace(/^(xmpp|jabber):/i, "").toLowerCase(),
-    notifyApproval: async ({ id }) => {
-      console.log(`[xmpp] JID approved for pairing: ${id}`);
+    normalizeAllowEntry,
+    notifyApproval: async ({ id, accountId }) => {
+      const runtime = runtimes.get(accountId ?? DEFAULT_ACCOUNT_ID);
+      if (runtime) {
+        await sendTextXmpp({ runtime, toJid: bareJid(id), text: "Pairing approved." });
+      }
     },
   },
   capabilities: {
@@ -68,7 +74,7 @@ export const xmppPlugin: ChannelPlugin<ResolvedXmppAccount> = {
   configSchema: {
     schema: {
       type: "object",
-      additionalProperties: true,
+      additionalProperties: false,
       properties: {
         enabled: { type: "boolean" },
         jid: { type: "string" },
@@ -80,7 +86,7 @@ export const xmppPlugin: ChannelPlugin<ResolvedXmppAccount> = {
           type: "object",
           additionalProperties: {
             type: "object",
-            additionalProperties: true,
+            additionalProperties: false,
             properties: {
               enabled: { type: "boolean" },
               name: { type: "string" },
@@ -100,6 +106,14 @@ export const xmppPlugin: ChannelPlugin<ResolvedXmppAccount> = {
     resolveAccount: (cfg, accountId) => resolveXmppAccount({ cfg: cfg as CoreConfig, accountId }),
     defaultAccountId: (cfg) => resolveDefaultXmppAccountId(cfg as CoreConfig),
     isConfigured: (account) => Boolean(account.jid?.trim() && account.password?.trim()),
+    inspectAccount: (cfg, accountId) => {
+      const account = resolveXmppAccount({ cfg: cfg as CoreConfig, accountId });
+      return {
+        enabled: account.enabled,
+        configured: Boolean(account.jid?.trim() && account.password?.trim()),
+        tokenStatus: account.password ? "available" : "missing",
+      };
+    },
     describeAccount: (account) => ({
       accountId: account.accountId,
       name: account.name,
@@ -109,16 +123,15 @@ export const xmppPlugin: ChannelPlugin<ResolvedXmppAccount> = {
       password: account.password ? "[set]" : "[missing]",
       service: account.service ? account.service : "[default]",
     }),
-    resolveAllowFrom: async ({ cfg, accountId }) => {
+    resolveAllowFrom: ({ cfg, accountId }) => {
       const a = resolveXmppAccount({ cfg: cfg as CoreConfig, accountId });
-      return (a.config.allowFrom ?? []).map((x) => String(x).toLowerCase());
+      return (a.config.allowFrom ?? []).map((x) => normalizeAllowEntry(String(x)));
     },
     formatAllowFrom: ({ allowFrom }) =>
       (allowFrom ?? [])
         .map((x) => String(x).trim())
         .filter(Boolean)
-        .map((x) => x.replace(/^(xmpp|jabber):/i, ""))
-        .map((x) => x.toLowerCase()),
+        .map(normalizeAllowEntry),
   },
   security: {
     resolveDmPolicy: ({ cfg, accountId, account }) => {
@@ -133,7 +146,7 @@ export const xmppPlugin: ChannelPlugin<ResolvedXmppAccount> = {
         policyPath: `${basePath}dmPolicy`,
         allowFromPath: basePath,
         approveHint: formatPairingApproveHint("xmpp"),
-        normalizeEntry: (raw) => raw.replace(/^(xmpp|jabber):/i, "").toLowerCase(),
+        normalizeEntry: normalizeAllowEntry,
       };
     },
     collectWarnings: ({ account }) => {
@@ -157,7 +170,11 @@ export const xmppPlugin: ChannelPlugin<ResolvedXmppAccount> = {
     validateInput: ({ input }) => {
       const i = input as XmppSetupInput;
       if (!i.jid) return "XMPP setup requires --jid";
+      if (!isValidBareJid(i.jid)) return "XMPP setup requires a valid bare JID";
       if (!i.password) return "XMPP setup requires --password";
+      if (i.service && !validateServiceUrl(i.service)) {
+        return "XMPP service must use xmpp://, xmpps://, ws://, or wss:// without embedded credentials";
+      }
       return null;
     },
     applyAccountConfig: ({ cfg, accountId, input }) => {
@@ -185,23 +202,17 @@ export const xmppPlugin: ChannelPlugin<ResolvedXmppAccount> = {
       return next;
     },
   },
-  status: {
-    describeAccountRuntime: async ({ accountId }) => {
-      const rt = runtimes.get(accountId);
-      return {
-        mode: "xmpp",
-        lastInboundAt: rt?.lastInboundAt ?? null,
-        lastOutboundAt: rt?.lastOutboundAt ?? null,
-      };
-    },
-  },
   gateway: {
     startAccount: async (ctx) => {
       const account = ctx.account;
+      const channelRuntime = ctx.channelRuntime as PluginRuntime["channel"] | undefined;
       if (!account.jid || !account.password) {
         throw new Error(
           `XMPP not configured for account "${account.accountId}" (missing jid or password)`,
         );
+      }
+      if (!channelRuntime?.inbound?.ingress?.resolve || !channelRuntime.inbound.buildContext) {
+        throw new Error("XMPP requires the registered OpenClaw channel runtime");
       }
 
       ctx.log?.info(`[${account.accountId}] starting XMPP client for ${account.jid}`);
@@ -217,27 +228,29 @@ export const xmppPlugin: ChannelPlugin<ResolvedXmppAccount> = {
           if (stanza?.is?.("presence")) {
             const type = stanza.attrs?.type;
             const from = stanza.attrs?.from;
-            if (type === "subscribe" && from && transportRuntime.client) {
+            const canSubscribe =
+              account.config.dmPolicy === "open" ||
+              (from && isJidAllowed(String(from), account.config.allowFrom ?? []));
+            if (type === "subscribe" && from && canSubscribe && transportRuntime.client) {
               ctx.log?.info(`[${account.accountId}] auto-approving subscription from ${from}`);
               void transportRuntime.client.send(xml("presence", { to: from, type: "subscribed" }));
               void transportRuntime.client.send(xml("presence", { to: from, type: "subscribe" }));
               return;
             }
           }
-          // fire and forget
           void handleXmppInbound({
             stanza,
             account,
             cfg: ctx.cfg as OpenClawConfig,
             runtime: ctx.runtime,
+            channelRuntime,
             transport: transportRuntime,
-            abortSignal: ctx.abortSignal,
             statusSink: (patch) => {
               if (patch.lastInboundAt) transportRuntime.lastInboundAt = patch.lastInboundAt;
               if (patch.lastOutboundAt) transportRuntime.lastOutboundAt = patch.lastOutboundAt;
               ctx.setStatus({ accountId: ctx.accountId, ...patch });
             },
-          });
+          }).catch((error) => ctx.log?.error(`inbound handling failed: ${String(error)}`));
         },
       });
 
@@ -258,18 +271,10 @@ export const xmppPlugin: ChannelPlugin<ResolvedXmppAccount> = {
       const id = accountId ?? DEFAULT_ACCOUNT_ID;
       const rt = runtimes.get(id);
       if (!rt) {
-        return { channel: "xmpp", ok: false, error: `account ${id} not started` };
+        throw new Error(`XMPP account ${id} is not started`);
       }
       const result = await sendTextXmpp({ runtime: rt, toJid: to, text });
-      return { channel: "xmpp", ...result } as any;
-    },
-    sendMedia: async ({ accountId }) => {
-      const id = accountId ?? DEFAULT_ACCOUNT_ID;
-      return {
-        channel: "xmpp",
-        ok: false,
-        error: `media not supported for xmpp account ${id}`,
-      };
+      return { channel: "xmpp", messageId: result.messageId, toJid: to };
     },
   },
 };

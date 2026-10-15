@@ -1,12 +1,12 @@
-import type { RuntimeEnv } from "openclaw/plugin-sdk";
+import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 
-let RUNTIME: RuntimeEnv | null = null;
+let RUNTIME: PluginRuntime | null = null;
 
-export function setXmppRuntime(runtime: RuntimeEnv) {
+export function setXmppRuntime(runtime: PluginRuntime) {
   RUNTIME = runtime;
 }
 
-export function getXmppRuntime(): RuntimeEnv {
+export function getXmppRuntime(): PluginRuntime {
   if (!RUNTIME) throw new Error("xmpp runtime not initialized");
   return RUNTIME;
 }

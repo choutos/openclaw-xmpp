@@ -1,6 +1,5 @@
-import { client as xmppClient, type Client } from "@xmpp/client";
+import { client as xmppClient, type Client, xml } from "@xmpp/client";
 import debug from "@xmpp/debug";
-import * as xmppXml from "@xmpp/xml";
 
 export type XmppAccountRuntime = {
   accountId: string;
@@ -11,18 +10,13 @@ export type XmppAccountRuntime = {
   lastOutboundAt?: number;
 };
 
-function resolveXml() {
-  const anyXml = xmppXml as any;
-  return anyXml.xml ?? anyXml.default ?? anyXml;
-}
-
 export async function startXmppClient(params: {
   accountId: string;
   jid: string;
   password: string;
   service?: string;
   log?: (line: string) => void;
-  onStanza: (runtime: XmppAccountRuntime, stanza: any) => void;
+  onStanza: (runtime: XmppAccountRuntime, stanza: any) => void | Promise<void>;
   abortSignal: AbortSignal;
 }): Promise<{ runtime: XmppAccountRuntime; stop: () => Promise<void> }> {
   const { accountId, jid, password, service, log, onStanza, abortSignal } = params;
@@ -42,28 +36,24 @@ export async function startXmppClient(params: {
 
   // Optional verbose wire logging when OPENCLAW_XMPP_DEBUG=1
   if (process.env.OPENCLAW_XMPP_DEBUG) {
-    debug(xmpp, (s: string) => log?.(`[xmpp:${accountId}] ${s}`));
+    debug(xmpp, true);
   }
 
   xmpp.on("stanza", (stanza: any) => {
-    if (process.env.OPENCLAW_XMPP_STANZA_LOG) {
-      const raw = stanza?.toString?.() ?? String(stanza);
-      log?.(`[xmpp:${accountId}] stanza: ${raw}`);
-    }
-    onStanza(runtime, stanza);
+    void Promise.resolve(onStanza(runtime, stanza)).catch((error) => {
+      log?.(`[xmpp:${accountId}] stanza handling failed: ${String(error)}`);
+    });
   });
   xmpp.on("error", (err: any) => log?.(`[xmpp:${accountId}] error: ${String(err)}`));
   xmpp.on("offline", () => log?.(`[xmpp:${accountId}] offline`));
   xmpp.on("online", async (address: any) => {
     log?.(`[xmpp:${accountId}] online as ${address.toString?.() ?? String(address)}`);
     try {
-      const xml = resolveXml();
       await xmpp.send(xml("presence"));
     } catch (err) {
       log?.(`[xmpp:${accountId}] initial presence broadcast failed: ${String(err)}`);
     }
     try {
-      const xml = resolveXml();
       const id = `oc-carbons-${Date.now()}`;
       await xmpp.send(
         xml("iq", { type: "set", id }, xml("enable", { xmlns: "urn:xmpp:carbons:2" })),
@@ -71,19 +61,6 @@ export async function startXmppClient(params: {
       log?.(`[xmpp:${accountId}] message carbons enabled`);
     } catch (err) {
       log?.(`[xmpp:${accountId}] message carbons enable failed: ${String(err)}`);
-    }
-
-    const autosubscribe = process.env.OPENCLAW_XMPP_AUTOSUBSCRIBE_TO;
-    if (autosubscribe) {
-      const xml = resolveXml();
-      for (const jid of autosubscribe.split(",").map((s) => s.trim()).filter(Boolean)) {
-        try {
-          await xmpp.send(xml("presence", { to: jid, type: "subscribe" }));
-          log?.(`[xmpp:${accountId}] sent subscribe request to ${jid}`);
-        } catch (err) {
-          log?.(`[xmpp:${accountId}] subscribe request failed for ${jid}: ${String(err)}`);
-        }
-      }
     }
   });
 

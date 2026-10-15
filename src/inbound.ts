@@ -1,20 +1,14 @@
-import {
-  logInboundDrop,
-  resolveControlCommandGate,
-  type OpenClawConfig,
-  type RuntimeEnv,
-} from "openclaw/plugin-sdk";
+import { logInboundDrop } from "openclaw/plugin-sdk/channel-inbound";
+import type { OpenClawConfig, PluginRuntime } from "openclaw/plugin-sdk/core";
+import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 
 import type { ResolvedXmppAccount } from "./accounts.js";
+import { bareJid, isValidBareJid, xmppIngressIdentity } from "./jid.js";
 import { getXmppRuntime } from "./runtime.js";
 import { sendTextXmpp } from "./send.js";
 import type { XmppAccountRuntime } from "./transport.js";
 
 const CHANNEL_ID = "xmpp" as const;
-
-function bareJid(jid: string): string {
-  return jid.split("/")[0];
-}
 
 const pairingHintSentAt = new Map<string, number>();
 
@@ -80,11 +74,11 @@ export async function handleXmppInbound(params: {
   account: ResolvedXmppAccount;
   cfg: OpenClawConfig;
   runtime: RuntimeEnv;
+  channelRuntime: PluginRuntime["channel"];
   transport: XmppAccountRuntime;
-  abortSignal: AbortSignal;
   statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
 }): Promise<void> {
-  const { stanza, account, cfg, runtime, transport, statusSink } = params;
+  const { stanza, account, cfg, runtime, channelRuntime, transport, statusSink } = params;
   const core = getXmppRuntime();
 
   // Only handle <message type='chat'|'normal'><body>...</body>
@@ -111,14 +105,17 @@ export async function handleXmppInbound(params: {
   const text = String(rawBody).trim();
   if (!text) return;
 
-  const senderFull = from ? String(from) : "unknown";
-  const senderId = from ? bareJid(String(from)) : "unknown";
-  const replyJid = senderFull !== "unknown" ? senderFull : senderId;
+  if (!from || !isValidBareJid(String(from))) return;
+  const senderFull = String(from);
+  const senderId = bareJid(senderFull);
+  if (account.jid && senderId === bareJid(account.jid)) return;
+  const replyJid = senderFull;
   const now = Date.now();
+  const dedupeSenderId = `${account.accountId}:${senderId}`;
 
   // Drop duplicates (by stanza id when present; otherwise by sender+body within a short window)
   // so we don't reply twice.
-  if (isDuplicateInbound({ senderId, stanzaId: id, text, now })) {
+  if (isDuplicateInbound({ senderId: dedupeSenderId, stanzaId: id, text, now })) {
     runtime.log?.(
       `xmpp: drop duplicate inbound sender=${senderId} id=${String(id)} textHash=${crypto
         .createHash("sha1")
@@ -132,106 +129,75 @@ export async function handleXmppInbound(params: {
   // Fallback: also drop same-text duplicates that arrive with different stanza ids
   // (common with carbon copies or some client/server retry behavior).
   const contentKey = `${senderId.toLowerCase()}::${text}`;
-  if (isDuplicateInbound({ senderId, text: contentKey, now })) {
+  if (isDuplicateInbound({ senderId: dedupeSenderId, text: contentKey, now })) {
     runtime.log?.(`xmpp: drop duplicate inbound (content) sender=${senderId}`);
     return;
   }
   const destId = to ? bareJid(String(to)) : account.jid ? bareJid(account.jid) : "unknown";
 
-  runtime.log?.(
-    `xmpp: inbound from=${senderId} to=${destId} type=${type ?? "chat"} text=${text.slice(0, 200)}`,
-  );
+  runtime.log?.(`xmpp: inbound from=${senderId} to=${destId} type=${type ?? "chat"}`);
 
   statusSink?.({ lastInboundAt: Date.now() });
 
-  // DM policy / pairing gate.
-  const dmPolicy = account.config.dmPolicy ?? "pairing";
-  const allowFrom = (account.config.allowFrom ?? [])
-    .map((entry) => String(entry).trim().replace(/^(xmpp|jabber):/i, "").toLowerCase())
-    .filter(Boolean);
-
-  const senderAllowed = (() => {
-    const s = senderId.toLowerCase();
-    for (const raw of allowFrom) {
-      const e = String(raw).trim().toLowerCase();
-      if (!e) continue;
-      if (e === "*") return true;
-      if (e.startsWith("*@")) {
-        const domain = e.slice(2);
-        if (domain && s.endsWith(`@${domain}`)) return true;
-      }
-      // allowFrom may also be configured as "@domain" or "domain" as shorthand
-      if (e.startsWith("@")) {
-        const domain = e.slice(1);
-        if (domain && s.endsWith(`@${domain}`)) return true;
-      }
-      if (!e.includes("@") && s.endsWith(`@${e}`)) return true;
-      if (e === s) return true;
-    }
-    return false;
-  })();
-
+  const route = core.channel.routing.resolveAgentRoute({
+    cfg,
+    channel: CHANNEL_ID,
+    accountId: account.accountId,
+    peer: { kind: "direct", id: senderId },
+  });
   const allowTextCommands = core.channel.commands.shouldHandleTextCommands({
     cfg,
     surface: CHANNEL_ID,
   });
-
   const hasControlCommand = core.channel.text.hasControlCommand(text, cfg);
-  const commandGate = resolveControlCommandGate({
-    useAccessGroups: cfg.commands?.useAccessGroups !== false,
-    authorizers: [
-      {
-        configured: allowFrom.length > 0,
-        allowed: senderAllowed,
-      },
-    ],
-    allowTextCommands,
-    hasControlCommand,
+  const dmPolicy = account.config.dmPolicy ?? "pairing";
+  const access = await channelRuntime.inbound.ingress.resolve({
+    channelId: CHANNEL_ID,
+    accountId: account.accountId,
+    identity: xmppIngressIdentity,
+    subject: { stableId: senderId },
+    conversation: { kind: "direct", id: senderId },
+    contextBinding: {
+      agentId: route.agentId,
+      sessionKey: route.sessionKey,
+      messageId: id,
+      nativeChannelId: senderId,
+      inboundEventKind: "user_request",
+    },
+    event: { kind: "message", authMode: "inbound", mayPair: true },
+    policy: { dmPolicy, groupPolicy: "disabled" },
+    allowFrom: account.config.allowFrom,
+    accessGroups: cfg.accessGroups,
+    useDefaultPairingStore: true,
+    command: { allowTextCommands, hasControlCommand },
   });
+  const commandAuthorized = access.commandAccess.authorized;
 
-  const commandAuthorized = commandGate.commandAuthorized;
-
-  if (dmPolicy === "disabled") {
-    runtime.log?.(`xmpp: drop DM sender=${senderId} (dmPolicy=disabled)`);
+  if (access.ingress.admission === "pairing-required") {
+    const { code } = await core.channel.pairing.upsertPairingRequest({
+      channel: CHANNEL_ID,
+      id: senderId,
+      accountId: account.accountId,
+      meta: { name: senderId },
+    });
+    if (shouldSendPairingHint(`${account.accountId}:${senderId}`)) {
+      try {
+        const hint = core.channel.pairing.buildPairingReply({
+          channel: CHANNEL_ID,
+          idLine: `Your XMPP JID: ${senderId}`,
+          code,
+        });
+        await sendTextXmpp({ runtime: transport, toJid: replyJid, text: hint });
+        statusSink?.({ lastOutboundAt: Date.now() });
+      } catch (err) {
+        runtime.error?.(`xmpp: pairing reply failed for ${senderId}: ${String(err)}`);
+      }
+    }
+    runtime.log?.(`xmpp: drop DM sender=${senderId} (pairing required)`);
     return;
   }
 
-  if (dmPolicy !== "open") {
-    const allowed = allowFrom.length === 0 ? false : senderAllowed;
-    if (!allowed) {
-      if (dmPolicy === "pairing") {
-        // Only create pairing requests for senders that are NOT already allowed.
-        // (e.g. if allowFrom includes *@quincy.snikket.chat, don't spam pairing codes.)
-        if (!senderAllowed) {
-          const { code } = await core.channel.pairing.upsertPairingRequest({
-            channel: CHANNEL_ID,
-            id: senderId,
-            meta: { name: senderId },
-          });
-
-          if (shouldSendPairingHint(senderId)) {
-            try {
-              const hint = core.channel.pairing.buildPairingReply({
-                channel: CHANNEL_ID,
-                idLine: `Your XMPP JID: ${senderId}`,
-                code,
-              });
-              // reply directly to sender
-              await sendTextXmpp({ runtime: transport, toJid: replyJid, text: hint });
-              statusSink?.({ lastOutboundAt: Date.now() });
-            } catch (err) {
-              runtime.error?.(`xmpp: pairing reply failed for ${senderId}: ${String(err)}`);
-            }
-          }
-        }
-      }
-
-      runtime.log?.(`xmpp: drop DM sender=${senderId} (dmPolicy=${dmPolicy})`);
-      return;
-    }
-  }
-
-  if (commandGate.shouldBlock) {
+  if (access.commandAccess.shouldBlockControlCommand) {
     logInboundDrop({
       log: (m) => runtime.log?.(m),
       channel: CHANNEL_ID,
@@ -240,24 +206,11 @@ export async function handleXmppInbound(params: {
     });
     return;
   }
-
-  let route = core.channel.routing.resolveAgentRoute({
-    cfg,
-    channel: CHANNEL_ID,
-    accountId: account.accountId,
-    peer: { kind: "dm", id: senderId },
-  });
-
-  // Safety: some misconfigurations or legacy session routing can fall back to a generic
-  // session key (e.g. "agent:main:main"), which can cause duplicate replies if a
-  // per-peer DM session also exists. Enforce a deterministic per-peer DM session key here.
-  const expectedPrefix = `agent:${route.agentId}:${CHANNEL_ID}:dm:`;
-  const expectedSessionKey = `${expectedPrefix}${senderId}`;
-  if (!route.sessionKey?.startsWith(expectedPrefix)) {
-    runtime.warn?.(
-      `xmpp: overriding unexpected sessionKey=${String(route.sessionKey)} -> ${expectedSessionKey}`,
+  if (access.ingress.admission !== "dispatch") {
+    runtime.log?.(
+      `xmpp: drop DM sender=${senderId} reason=${access.ingress.reasonCode}`,
     );
-    route = { ...route, sessionKey: expectedSessionKey };
+    return;
   }
 
   const fromLabel = senderId;
@@ -279,25 +232,24 @@ export async function handleXmppInbound(params: {
     body: text,
   });
 
-  const ctxPayload = core.channel.reply.finalizeInboundContext({
-    Body: body,
-    RawBody: text,
-    CommandBody: text,
-    From: `xmpp:${senderId}`,
-    To: `xmpp:${destId}`,
-    SessionKey: route.sessionKey,
-    AccountId: route.accountId,
-    ChatType: "direct",
-    ConversationLabel: fromLabel,
-    SenderName: senderId,
-    SenderId: senderId,
-    Provider: CHANNEL_ID,
-    Surface: CHANNEL_ID,
-    MessageSid: id,
-    Timestamp: Date.now(),
-    OriginatingChannel: CHANNEL_ID,
-    OriginatingTo: `xmpp:${destId}`,
-    CommandAuthorized: commandAuthorized,
+  const ctxPayload = channelRuntime.inbound.buildContext({
+    channelIngress: access,
+    channel: CHANNEL_ID,
+    accountId: route.accountId,
+    messageId: id,
+    timestamp: now,
+    from: `xmpp:${senderId}`,
+    sender: { id: senderId, name: senderId },
+    conversation: { kind: "direct", id: senderId, label: fromLabel },
+    route: {
+      agentId: route.agentId,
+      dmScope: route.dmScope,
+      accountId: route.accountId,
+      routeSessionKey: route.sessionKey,
+    },
+    reply: { to: `xmpp:${senderId}`, originatingTo: `xmpp:${senderId}` },
+    message: { body, bodyForAgent: text, rawBody: text, commandBody: text },
+    access: { commands: { authorized: commandAuthorized } },
   });
 
   await core.channel.session.recordInboundSession({

@@ -1,7 +1,7 @@
 import {
   DEFAULT_ACCOUNT_ID,
   type OpenClawConfig,
-} from "openclaw/plugin-sdk";
+} from "openclaw/plugin-sdk/core";
 
 // (no zod schema import)
 
